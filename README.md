@@ -1,6 +1,5 @@
 # php-socke-chatroom
 一个简单的php socket聊天室
-
 1. 在命令行中运行server.php
 ```
    php server.php
