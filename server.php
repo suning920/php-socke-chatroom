@@ -14,7 +14,7 @@ class SocketServer{
 
 	public function __construct($host, $port){
 		$this->master = $this->createSocket($host, $port);
-		$this->sockets[] = $this->master;
+		$this->sockets['master'] = $this->master;
 	}
 
     public function run() {
@@ -30,36 +30,31 @@ class SocketServer{
                     $client = socket_accept($this->master);
                     if ($client===false){
                         $error =  'socket_accept() failed:'.socket_strerror(socket_last_error());
-                        echo $error;
                         $this->log($error);
                     }else{
-                    	$str = "client info\t".serialize($client);
-                        $this->log(__LINE__."\t".$str);
-                        $uid = $this->generateId();
                         $this->sockets[] = $client;//加入用户列表
                         $this->users[] = array('socket'=>$client, 'isHandShake'=>false);
                     }
                 }else{
                     $length = socket_recv($socket, $buffer, 2048, 0);
-                    /*if($length===false){
+                    if($length===false){
                         $error = 'socket_recv() failed:'.socket_strerror(socket_last_error());
-                        echo $error."\n";
                         $this->log($error."\n");
                         continue;
-                    }*/
+                    }
 
                     $index = $this->searchSocketFromUsers($socket);
                     $data = $this->decode($buffer);
                     $this->log($data);
-                    var_dump($index);
+                    $this->log("length：$length");
+                    $this->log("data：$data");
+                    $data = json_decode($data, true);
                     $user = $this->users[$index];
-                    if($length < 7){
+                    if($length <= 8 || $data['type']==3){
                         $this->closeSocket($socket);
-                    }elseif(!$user['isHandShake'] ||empty($data)){
+                    }elseif(!$user['isHandShake']){
                         $this->handshake($index, $buffer);//进行握手
                     }else{
-                        
-                        $data = json_decode($data, true);
                         if($data['type']==0){ //加入聊天
                             $this->addUser($index, $data);
                         }elseif($data['type']==1){ //聊天
@@ -75,32 +70,43 @@ class SocketServer{
     }
 
     private function chat($socket, $data){
+    	$this->log("聊天开始");
     	$index = $this->searchSocketFromUsers($socket);
-    	$response = array('type'=>$data['type'], 'msg'=>$data['msg'], 'fromUser'=>$this->users[$index]['user']);
+    	$toUserSocket = $fromUserSocket = '';
+        if($data['toUser']!='all'){
+        	$toUserSocket = $this->users[$data['toUser']]['socket'];
+        	$fromUserSocket = $this->users[$index]['socket'];
+        	$toUser = $this->users[$data['toUser']]['user'];
+        }else{
+        	$toUser = array('uid'=>'all');
+        }
+    	$response = array('type'=>$data['type'], 'msg'=>$data['msg'], 'fromUser'=>$this->users[$index]['user'], 'toUser'=>$toUser);
     	$response = json_encode($response, JSON_UNESCAPED_UNICODE);
 
     	$this->log('返回的聊天数据：'.$response);
 
-        $response = $this->encode($response);
-        $userSocket = '';
-        if($data['toUser']!='all'){
-        	$userSocket = $this->users[$data['toUser']]['socket'];
+        $response = $this->encode($response);        
+        $this->responseMsg($response, $toUserSocket);
+        if($fromUserSocket){
+			$this->responseMsg($response, $fromUserSocket);
         }
-        $this->responseMsg($response, $userSocket);
-
+        $this->log("聊天结束\n");
     }
 
     private function addUser($index, $data){
+    	$this->log("用户加入开始");
         $this->users[$index]['user']['username'] = $data['username'];
         $this->users[$index]['user']['uid'] = $index;
         $response = array('type'=>0, 'users'=>$this->getusers(), 'addUser'=>$data['username'], 'uid'=>$index);
         $response = json_encode($response, JSON_UNESCAPED_UNICODE);
         $response = $this->encode($response);
         $this->responseMsg($response);
+        $this->log("用户加入结束\n");
     }
 
     private function closeSocket($socket){
-		$index = $this->searchSocketFromUsers($socket);
+    	$this->log("关闭socket开始");
+		$index = array_search($socket, $this->sockets);
 		$logoutUser = $this->users[$index]['user'];
 		$response = array('type'=>2, 'user'=>$this->users[$index]['user']);
 		$response = json_encode($response, JSON_UNESCAPED_UNICODE);
@@ -113,6 +119,7 @@ class SocketServer{
 
         $response = $this->encode($response);
         $this->responseMsg($response);
+        $this->log("关闭socket结束\n");
     }
 
     /**
@@ -121,6 +128,10 @@ class SocketServer{
      * @param $buffer
      */
     private function handshake($index, $buffer){
+    	$this->log("\n握手开始");
+    	$this->log('index:'.$index);
+        $this->log($this->users);
+
         $buf  = substr($buffer, strpos($buffer, 'Sec-WebSocket-Key:')+18);
         $key  = trim(substr($buf,0,strpos($buf,"\r\n")));
         $newKey = base64_encode(sha1($key."258EAFA5-E914-47DA-95CA-C5AB0DC85B11", true));
@@ -131,11 +142,10 @@ class SocketServer{
         $upgrade .= "Connection: Upgrade\r\n";
         $upgrade .= "Sec-WebSocket-Accept: " . $newKey . "\r\n\r\n";
 
-        $this->log('index:'.$index);
-        $this->log($this->users);
-
         socket_write($this->users[$index]['socket'], $upgrade, strlen($upgrade));
         $this->users[$index]['isHandShake']=true;
+
+        $this->log("握手结束\n");
     }
 
     /**
@@ -162,48 +172,42 @@ class SocketServer{
         return $user;
     }
 
+    /**
+     * 编码数据帧
+     */
     private  function encode($msg){
-        $msg = preg_replace(array('/\r$/','/\n$/','/\r\n$/',), '', $msg);
-        $frame = array();
-        $frame[0] = '81';
-        $len = strlen($msg);
-        $frame[1] = $len<16?'0'.dechex($len):dechex($len);
-        $frame[2] = $this->ordHex($msg);
-        $data = implode('',$frame);
-        return pack("H*", $data);
+        $b1 = 0x80 | (0x1 & 0x0f);
+	    $length = strlen($msg);
+	    if($length <= 125){
+	        $header = pack('CC', $b1, $length);
+	    }elseif($length > 125 && $length < 65536){
+	        $header = pack('CCn', $b1, 126, $length);
+	    }elseif($length >= 65536){
+	        $header = pack('CCNN', $b1, 127, $length);
+	    }
+	    return $header.$msg;
     }
 
-    private function ordHex($data)  {  
-        $msg = '';  
-        $l = strlen($data);  
-        for ($i= 0; $i<$l; $i++) {  
-            $msg .= dechex(ord($data{$i}));  
-        }  
-        return $msg;  
-    }
-
+    /**
+     * 解码数据帧
+     */
     private function decode($str){
-        $mask = array();
-        $data = '';
-        $msg = unpack('H*',$str);
-        $head = substr($msg[1],0,2);
-        if (hexdec($head{1}) === 8) {
-            $data = false;
-        }else if (hexdec($head{1}) === 1){
-            $mask[] = hexdec(substr($msg[1],4,2));
-            $mask[] = hexdec(substr($msg[1],6,2));
-            $mask[] = hexdec(substr($msg[1],8,2));
-            $mask[] = hexdec(substr($msg[1],10,2));
-
-            $s = 12;
-            $e = strlen($msg[1])-2;
-            $n = 0;
-            for ($i=$s; $i<= $e; $i+= 2) {
-                $data .= chr($mask[$n%4]^hexdec(substr($msg[1],$i,2)));
-                $n++;
-            }
-        }
-        return $data;
+        $length = ord($str[1]) & 127;
+	    if($length == 126){
+	        $masks = substr($str, 4, 4);
+	        $data = substr($str, 8);
+	    }elseif($length == 127){
+	        $masks = substr($str, 10, 4);
+	        $data = substr($str, 14);
+	    }else{
+	        $masks = substr($str, 2, 4);
+	        $data = substr($str, 6);
+	    }
+	    $str = "";
+	    for($i = 0; $i < strlen($data); ++$i){
+	        $str .= $data[$i] ^ $masks[$i%4];
+	    }
+	    return $str;
     }
 
     /**
@@ -253,9 +257,5 @@ class SocketServer{
     private function getResponseData($status='0', $msg='success', $data=array()){
         $arr = array('status'=>$status, 'msg'=>$msg, $data=>$data);
         return json_encode($arr, JSON_UNESCAPED_UNICODE );
-    }
-
-    private function generateId(){
-    	return md5(uniqid());
     }
 }

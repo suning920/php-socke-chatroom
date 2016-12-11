@@ -45,7 +45,7 @@
 			socket.onopen = function(){
 				if(socket.readyState==1){
 					console.log('握手成功...');
-					socket.send('{"type":"0", "username":"'+nickname+'"}');
+					socket.send('{"type":"0","username":"'+nickname+'"}');
 				}else{
 					content.appendChild('<p class="e">进入失败！<p>');
 					addMsg("<p class='msg-error text-center'>"+nickname+"退出聊天室</p>")
@@ -60,7 +60,7 @@
 				if(data.type==0){ //加入
 					$.each(data.users, function(k, v){
 						if(!users[k]){
-							var str = '<a href="javascript:;" class="user_'+k+'" onClick="selectUser(\''+k+'\',this)">'+v['username']+'</a>';
+							var str = '<a href="javascript:;" class="user_item user_'+k+'" onClick="selectUser(\''+k+'\',this)">'+v['username']+'</a>';
 							users[k] = v;
 							$('.users').append(str);
 						}
@@ -77,7 +77,25 @@
 					$('.msg-box').show();
 					console.log(users);
 				}else if(data.type==1){  //聊天
-					addMsg("<p class='new-msg'>"+data.msg+"</p>");
+					console.log(data.toUser);
+					console.log(data.fromUser);
+					var msg = '';
+					if(data.fromUser.uid==uid){
+						msg += '我对';
+					}else{
+						msg += data.fromUser.username+'对';
+					}
+
+					if(data.toUser.uid=='all'){
+						msg += '所有人说：'
+					}else if(data.toUser.uid==uid){
+						msg += '我说：'
+					}else{
+						msg += data.toUser.username+'说：'
+					}
+					msg += data.msg;
+
+					addMsg("<p class='new-msg'>"+msg+"</p>");
 				}else if(data.type==2){ //退出
 					users.splice(data.user.uid, 1);
 					$('.users .user_'+data.user.uid).remove();
@@ -87,13 +105,11 @@
 
 			socket.onclose = function(even){
 				socket = null;
-                console.log('was clean?'+event.wasClean+'code='+event.code+'reason='+event.reason);
+				console.log('退出聊天室...');
+                console.log('was clean?'+even.wasClean+'   code='+even.code+'   reason='+even.reason);
                 // addMsg("<p class='user-logout'>退出聊天室</p>")
 			};
 
-			socket.onclose = function(){
-				console.log('退出聊天室...');
-			};
 		}
 
 		function selectUser(user, obj){
@@ -103,14 +119,23 @@
 
 		function sendMsg(){
 			var msg = $.trim($('.msg-content').val());
-			// socket.send('type=ltiao&nr='+msg+'&user='+toUser);
+			$('.msg-content').val('');
 			var data = '{"type":"1","msg":"'+msg+'","toUser":"'+toUser+'","uid":"'+uid+'"}';
 			console.log(data);
 			socket.send(data);
 		}
 
 		function logoutCharRoom(){
-
+			$('.set-nickname').show();
+			$('.msg-box').hide();
+			$('.user_item').remove();
+			$('.content').html('');
+			socket.send('{"type":"3"}');
+			socket = null;
+			users = Array();
+			toUser = 'all';
+			uid = null;
+			addMsg("<p class='user-logout text-center'>退出聊天室</p>")
 		}
 
 		function addMsg(msg){
